@@ -53,10 +53,10 @@ def map_naver_category_to_app(category_text: str) -> str:
     if any(x in text for x in ["카페", "디저트", "베이커리", "브런치", "커피", "제과", "제빵"]):
         return "카페"
 
-    if any(x in text for x in ["체험", "전시", "공원", "관광", "테마", "오락", "방탈출", "노래방", "게임", "PC"]):
+    if any(x in text for x in ["미술", "해변", "호수", "산", "체험", "전시", "공원", "관광", "테마", "오락", "방탈출", "노래방", "게임", "PC"]):
         return "놀거리"
         
-    if any(x in text for x in ["식당", "음식점", "한식", "중식", "일식", "양식", "고기", "찌개", "술집", "포차", "바", "치킨", "꼬치", "국수", "김밥", "만두", "족발"]):
+    if any(x in text for x in ["식당", "음식점", "한식", "중식", "일식", "양식", "고기", "찌개", "술집", "포차", "바", "치킨", "꼬치", "국수", "김밥", "만두", "족발", "초밥"]):
         return "식당"
 
     # 위 세 개에 걸리지 않으면 '기타'로 분류
@@ -674,11 +674,34 @@ def main() -> None:
                             st.write(f"- {day}: {open_t} ~ {close_t}{break_text}")
                     
                     st.write("")
-                    col1, col2 = st.columns([1, 1])
+                    col1, col2, col3 = st.columns([1, 1.3, 1])
                     if col1.button("✏️ 이 장소 수정", key=f"edit_btn_{place.get('place_id', idx)}_{idx}"):
                         st.session_state.editing_place_id = place.get("place_id")
                         st.rerun()
-                    if col2.button("🗑️ 이 장소 삭제", key=f"del_btn_{place.get('place_id', idx)}_{idx}"):
+                        
+                    # [신규 기능] 원격 최신 정보 동기화 버튼 클릭 시 동작
+                    if col2.button("🔄 정보 업데이트", key=f"sync_btn_{place.get('place_id', idx)}_{idx}"):
+                        with st.spinner(f"'{place.get('name')}' 최신 영업시간 가져오는 중..."):
+                            try:
+                                fresh_data = crawl_naver_place(place.get("source_url"))
+                                if fresh_data.get("success"):
+                                    # 기존 데이터 구조에서 영업시간 관련 필드만 최신 크롤링 데이터로 치환
+                                    for p in st.session_state.places:
+                                        if p.get("place_id") == place.get("place_id"):
+                                            p["weekly_hours"] = fresh_data["weekly_hours"]
+                                            p["closed_days"] = fresh_data["closed_days"]
+                                            p["original_category"] = fresh_data["original_category"]
+                                            p["last_updated"] = datetime.now(KST).isoformat(timespec="seconds")
+                                            break
+                                    save_places(st.session_state.places)
+                                    st.toast(f"🎉 '{place.get('name')}' 영업시간 업데이트 완료!", icon="✅")
+                                    st.rerun()
+                                else:
+                                    st.error("네이버에서 최신 정보를 읽어오지 못했습니다. 주소를 확인하거나 수동으로 수정해 주세요.")
+                            except Exception as e:
+                                st.error(f"업데이트 중 오류 발생: {e}")
+                                
+                    if col3.button("🗑️ 이 장소 삭제", key=f"del_btn_{place.get('place_id', idx)}_{idx}"):
                         delete_place(place.get("place_id"))
                         st.rerun()
     else:
