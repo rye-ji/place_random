@@ -100,12 +100,10 @@ def delete_place(place_id: str) -> None:
 
 
 def resolve_short_url(url: str) -> str:
-    """naver.me 단축 URL의 실제 목적지 주소를 추적합니다."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
     try:
-        # allow_redirects=True로 설정하여 최종 목적지까지 리다이렉트 유도
         response = requests.head(url, headers=headers, allow_redirects=True, timeout=5)
         return response.url
     except Exception:
@@ -115,7 +113,6 @@ def resolve_short_url(url: str) -> str:
 def normalize_input(raw: str):
     raw = raw.strip()
     
-    # naver.me 단축 URL인 경우 먼저 풀어서 진짜 URL 확보
     if "naver.me" in raw:
         with st.spinner("단축 URL 주소 확인 중..."):
             raw = resolve_short_url(raw)
@@ -342,11 +339,9 @@ def parse_time_str(s: str) -> Optional[time]:
         hh, mm = s.split(":")
         h, m = int(hh), int(mm)
         
-        # [수정] 24:00 예외 안전하게 예외처리 (23:59:59로 매핑)
         if h == 24 and m == 0:
             return time(23, 59, 59)
             
-        # 25:00, 26:00 같은 익일 새벽 마감시간 처리
         return time(h % 24, m)
     except Exception:
         return None
@@ -397,7 +392,6 @@ def is_open_now(record: Dict[str, Any], now: Optional[datetime] = None) -> bool:
     return is_open_for_schedule(today_info, False) or is_open_for_schedule(yesterday_info, True)
 
 
-# [수정] 랜덤 추천 시 선택한 카테고리만 필터링되도록 보완
 def random_recommendation(records: List[Dict[str, Any]], category_filter: str) -> Optional[Dict[str, Any]]:
     candidates = [r for r in records if is_open_now(r)]
     
@@ -558,72 +552,117 @@ def main() -> None:
     ensure_state()
 
     st.title("💘 데이트용 장소 추천기")
-    st.caption("네이버 플레이스 ID, 단축 URL(naver.me)을 지원하며, 카테고리별 조건부 랜덤 추천이 가능합니다.")
+    st.caption("네이버 플레이스 ID, 단축 URL(naver.me)을 지원하며, 실시간 영업시간 원격 업데이트가 가능합니다.")
 
-    with st.form("add_place_form", clear_on_submit=False):
-        raw_input = st.text_input("네이버 플레이스 주소 또는 단축 링크", placeholder="예: 15333275 또는 https://naver.me/xktVvqyF")
-        submitted = st.form_submit_button("장소 추가")
+    # [수정] 장소 추가폼과 랜덤 추천을 상단 한 행에 2개의 열로 배치
+    col_left, col_right = st.columns(2)
+    
+    with col_left:
+        st.subheader("➕ 장소 추가")
+        with st.form("add_place_form", clear_on_submit=False):
+            raw_input = st.text_input("네이버 플레이스 주소 또는 단축 링크", placeholder="예: 15333275 또는 https://naver.me/xktVvqyF")
+            submitted = st.form_submit_button("장소 분석 시작")
 
-    if submitted and raw_input.strip():
-        st.session_state.render_key = str(random.randint(1000, 9999))
-        
-        with st.spinner("네이버 플레이스 연동 중..."):
-            try:
-                crawled = crawl_naver_place(raw_input)
-                st.session_state.pending_place = crawled
-                if crawled.get("success"):
-                    st.session_state.crawl_message = f"🎉 성공적으로 분석했습니다! '{crawled.get('name')}'의 데이터를 확인해 주세요."
-                else:
-                    st.session_state.crawl_message = "⚠️ 영업시간 구조를 자동으로 읽지 못했습니다. 아래에서 정보를 채워주세요."
-            except Exception as e:
-                st.session_state.pending_place = {
-                    "place_id": normalize_input(raw_input)[0],
-                    "source_url": normalize_input(raw_input)[1],
-                    "name": "",
-                    "category": "기타",
-                    "original_category": "",
-                    "closed_days": [],
-                    "weekly_hours": default_weekly_hours(),
-                    "success": False,
-                    "error": str(e),
-                }
-                st.session_state.crawl_message = f"❌ 오류 발생: {e}"
+        if submitted and raw_input.strip():
+            st.session_state.render_key = str(random.randint(1000, 9999))
+            
+            with st.spinner("네이버 플레이스 연동 중..."):
+                try:
+                    crawled = crawl_naver_place(raw_input)
+                    st.session_state.pending_place = crawled
+                    if crawled.get("success"):
+                        st.session_state.crawl_message = f"🎉 성공적으로 분석했습니다! 아래에서 '{crawled.get('name')}'의 데이터를 최종 확인해 주세요."
+                    else:
+                        st.session_state.crawl_message = "⚠️ 영업시간 구조를 자동으로 읽지 못했습니다. 아래에서 수동으로 채워주세요."
+                except Exception as e:
+                    st.session_state.pending_place = {
+                        "place_id": normalize_input(raw_input)[0],
+                        "source_url": normalize_input(raw_input)[1],
+                        "name": "",
+                        "category": "기타",
+                        "original_category": "",
+                        "closed_days": [],
+                        "weekly_hours": default_weekly_hours(),
+                        "success": False,
+                        "error": str(e),
+                    }
+                    st.session_state.crawl_message = f"❌ 오류 발생: {e}"
 
-    if st.session_state.crawl_message:
-        if "성공" in st.session_state.crawl_message or "분석" in st.session_state.crawl_message:
-            st.success(st.session_state.crawl_message)
-        else:
-            st.warning(st.session_state.crawl_message)
-
-    pending = st.session_state.pending_place
-    if pending:
-        if pending.get("success"):
-            edited = render_auto_form(pending)
-        else:
-            edited = render_manual_form(pending)
-
-        final = {
-            "place_id": pending.get("place_id", ""),
-            "source_url": pending.get("source_url", ""),
-            "name": edited.get("name", pending.get("name", "")),
-            "category": edited.get("category", "기타"),
-            "original_category": pending.get("original_category", ""),
-            "closed_days": edited.get("closed_days", []),
-            "weekly_hours": edited.get("weekly_hours", default_weekly_hours()),
-        }
-
-        if st.button("최종 확인 및 저장", type="primary"):
-            if not final["name"]:
-                st.error("장소명을 입력하세요.")
+        if st.session_state.crawl_message:
+            if "성공" in st.session_state.crawl_message or "분석" in st.session_state.crawl_message:
+                st.success(st.session_state.crawl_message)
             else:
-                add_place_to_store(final)
-                st.success(f"'{final['name']}' 장소가 저장되었습니다!")
-                st.session_state.pending_place = None
-                st.session_state.crawl_message = ""
-                st.rerun()
+                st.warning(st.session_state.crawl_message)
+
+        pending = st.session_state.pending_place
+        if pending:
+            if pending.get("success"):
+                edited = render_auto_form(pending)
+            else:
+                edited = render_manual_form(pending)
+
+            final = {
+                "place_id": pending.get("place_id", ""),
+                "source_url": pending.get("source_url", ""),
+                "name": edited.get("name", pending.get("name", "")),
+                "category": edited.get("category", "기타"),
+                "original_category": pending.get("original_category", ""),
+                "closed_days": edited.get("closed_days", []),
+                "weekly_hours": edited.get("weekly_hours", default_weekly_hours()),
+            }
+
+            if st.button("최종 확인 및 저장", type="primary"):
+                if not final["name"]:
+                    st.error("장소명을 입력하세요.")
+                else:
+                    add_place_to_store(final)
+                    st.success(f"'{final['name']}' 장소가 저장되었습니다!")
+                    st.session_state.pending_place = None
+                    st.session_state.crawl_message = ""
+                    st.rerun()
+
+    with col_right:
+        st.subheader("🎲 랜덤 추천")
+        recommend_cat = st.selectbox("추천받을 카테고리 선택", CATEGORY_OPTIONS, index=0, key="recommend_cat_select")
+        
+        if st.button("선택한 카테고리에서 랜덤 1곳 추천", type="primary", use_container_width=True):
+            rec = random_recommendation(st.session_state.places, recommend_cat)
+            if rec:
+                orig_cat = rec.get('original_category', '')
+                cat_display = f" [{orig_cat}]" if orig_cat else ""
+                st.success(f"🎯 오늘 추천 장소: **{rec.get('name', '')}** ({rec.get('category', '기타')}){cat_display}")
+                st.write(f"🔗 링크 바로가기: {rec.get('source_url', '')}")
+            else:
+                st.warning(f"현재 영업 중인 '{recommend_cat}' 카테고리의 저장 장소가 없습니다.")
 
     st.divider()
-    st.subheader("저장된 장소")
+    
+    # [수정/신규] 저장된 장소 섹션 헤더 및 전체 일괄 업데이트 버튼 배치
+    st.subheader("📋 저장된 장소 목록")
+    
+    col_sync, col_space = st.columns([1, 2])
+    with col_sync:
+        # [신규 기능] 일률적으로 모든 장소 전체 업데이트 버튼
+        if st.button("🔄 모든 장소 일괄 업데이트", use_container_width=True):
+            if not st.session_state.places:
+                st.warning("업데이트할 저장된 장소가 없습니다.")
+            else:
+                success_count = 0
+                with st.spinner("모든 장소의 최신 네이버 정보를 가져오는 중입니다..."):
+                    for idx, p in enumerate(st.session_state.places):
+                        try:
+                            fresh_data = crawl_naver_place(p.get("source_url"))
+                            if fresh_data.get("success"):
+                                p["weekly_hours"] = fresh_data["weekly_hours"]
+                                p["closed_days"] = fresh_data["closed_days"]
+                                p["original_category"] = fresh_data["original_category"]
+                                p["last_updated"] = datetime.now(KST).isoformat(timespec="seconds")
+                                success_count += 1
+                        except Exception:
+                            pass
+                    save_places(st.session_state.places)
+                    st.success(f"🎉 총 {success_count}개 장소의 영업시간 정보가 최신화되었습니다!")
+                    st.rerun()
 
     left, right = st.columns([1, 1])
     with left:
@@ -658,6 +697,14 @@ def main() -> None:
                     st.write(f"**앱 분류:** {place.get('category', '')}")
                     st.write(f"**URL:** {place.get('source_url', '')}")
                     
+                    last_up = place.get('last_updated', '')
+                    if last_up:
+                        try:
+                            dt_parsed = datetime.fromisoformat(last_up).strftime("%Y-%m-%d %H:%M")
+                            st.caption(f"📅 최종 업데이트: {dt_parsed}")
+                        except Exception:
+                            st.caption(f"📅 최종 업데이트: {last_up}")
+
                     weekly = place.get("weekly_hours") or {}
                     for day in WEEKDAYS_KO:
                         info = weekly.get(day, {})
@@ -679,13 +726,11 @@ def main() -> None:
                         st.session_state.editing_place_id = place.get("place_id")
                         st.rerun()
                         
-                    # [신규 기능] 원격 최신 정보 동기화 버튼 클릭 시 동작
-                    if col2.button("🔄 정보 업데이트", key=f"sync_btn_{place.get('place_id', idx)}_{idx}"):
+                    if col2.button("🔄 개별 업데이트", key=f"sync_btn_{place.get('place_id', idx)}_{idx}"):
                         with st.spinner(f"'{place.get('name')}' 최신 영업시간 가져오는 중..."):
                             try:
                                 fresh_data = crawl_naver_place(place.get("source_url"))
                                 if fresh_data.get("success"):
-                                    # 기존 데이터 구조에서 영업시간 관련 필드만 최신 크롤링 데이터로 치환
                                     for p in st.session_state.places:
                                         if p.get("place_id") == place.get("place_id"):
                                             p["weekly_hours"] = fresh_data["weekly_hours"]
@@ -697,7 +742,7 @@ def main() -> None:
                                     st.toast(f"🎉 '{place.get('name')}' 영업시간 업데이트 완료!", icon="✅")
                                     st.rerun()
                                 else:
-                                    st.error("네이버에서 최신 정보를 읽어오지 못했습니다. 주소를 확인하거나 수동으로 수정해 주세요.")
+                                    st.error("네이버에서 최신 정보를 읽어오지 못했습니다.")
                             except Exception as e:
                                 st.error(f"업데이트 중 오류 발생: {e}")
                                 
@@ -708,29 +753,34 @@ def main() -> None:
         st.info("조건에 맞는 장소가 없습니다.")
 
     st.divider()
-    st.subheader("🎲 랜덤 추천")
+    st.subheader("💾 데이터 백업 및 관리 (중요)")
     
-    # [수정] 랜덤 추천받을 카테고리를 고를 수 있도록 필터 셀렉트박스 추가
-    recommend_cat = st.selectbox("추천받을 카테고리 선택", CATEGORY_OPTIONS, index=0, key="recommend_cat_select")
-    
-    if st.button("선택한 카테고리에서 랜덤 1곳 추천", type="primary"):
-        rec = random_recommendation(st.session_state.places, recommend_cat)
-        if rec:
-            orig_cat = rec.get('original_category', '')
-            cat_display = f" [{orig_cat}]" if orig_cat else ""
-            st.success(f"🎯 오늘 추천 장소: **{rec.get('name', '')}** ({rec.get('category', '기타')}){cat_display}")
-            st.write(f"🔗 링크 바로가기: {rec.get('source_url', '')}")
-        else:
-            st.warning(f"현재 영업 중인 '{recommend_cat}' 카테고리의 저장 장소가 없습니다.")
+    # [신규 기능] 클라우드 배포 환경에서 데이터 유실 시 즉시 복구할 수 있는 업로더 추가
+    col_down, col_up = st.columns(2)
+    with col_down:
+        st.write("1. 장소를 추가하거나 수정한 뒤에는 아래 버튼으로 백업본을 저장해 두세요.")
+        export_json = json.dumps(st.session_state.places, ensure_ascii=False, indent=2)
+        st.download_button("📥 JSON 백업 다운로드", data=export_json, file_name="places_data.json", mime="application/json")
+        
+    with col_up:
+        st.write("2. 코드가 수정되어 데이터가 사라졌다면, 받아둔 백업 파일을 아래에 넣으세요.")
+        uploaded_file = st.file_uploader("📤places_data.json 백업 파일 올리기", type=["json"])
+        if uploaded_file is not None:
+            try:
+                uploaded_data = json.load(uploaded_file)
+                if isinstance(uploaded_data, list):
+                    st.session_state.places = uploaded_data
+                    save_places(uploaded_data)
+                    st.success("🎉 데이터 복구 완료! 저장된 장소가 다시 나타납니다.")
+                    st.rerun()
+                else:
+                    st.error("올바른 백업 파일 형식이 아닙니다.")
+            except Exception as e:
+                st.error(f"파일을 읽는 도중 오류가 발생했습니다: {e}")
 
-    st.divider()
-    st.subheader("데이터 백업 및 초기화")
-    export_json = json.dumps(st.session_state.places, ensure_ascii=False, indent=2)
-    st.download_button("JSON 다운로드", data=export_json, file_name="places_data.json", mime="application/json")
-
-    with st.expander("저장 파일을 직접 초기화하고 싶다면"):
+    with st.expander("저장 파일을 완전히 초기화하고 싶다면"):
         st.write(f"저장 위치: `{DATA_FILE.resolve()}`")
-        if st.button("저장 데이터 비우기", type="secondary"):
+        if st.button("저장 데이터 전체 비우기", type="secondary"):
             st.session_state.places = []
             save_places([])
             st.success("초기화되었습니다.")
