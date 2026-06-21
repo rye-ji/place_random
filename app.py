@@ -124,7 +124,14 @@ def save_places(places: List[Dict[str, Any]]) -> None:
             p_copy["weekly_hours"] = json.dumps(p_copy.get("weekly_hours", {}), ensure_ascii=False)
             serialized_places.append(p_copy)
             
-        df = pd.DataFrame(serialized_places)
+        # 🔥 [핵심 수정] 장소를 전부 삭제해서 데이터가 0개가 되더라도, 
+        # 1행(헤더)이 날아가지 않도록 전체 컬럼명을 명시적으로 지정합니다.
+        columns = [
+            "place_id", "source_url", "name", "category", 
+            "original_category", "closed_days", "weekly_hours", "last_updated"
+        ]
+        df = pd.DataFrame(serialized_places, columns=columns)
+        
         conn.update(worksheet="시트1", data=df)
         st.session_state.places = places # 로컬 상태 업데이트
     except Exception as e:
@@ -596,28 +603,28 @@ def main() -> None:
         st.toast("구글 시트의 최신 데이터를 가져왔습니다!", icon="✅")
         st.rerun()
 
-    st.title("💘 데이트용 장소 추천기 (Google Sheets Cloud)")
-    st.caption("구글 시트와 연동되어 데이터 유실 없이 실시간 공유가 가능합니다.")
+    st.title("💘 장소 추천기")
+    st.caption("최예지의, 최예지에 의한, 최예지를 위한 추첨기")
 
     col_left, col_right = st.columns(2)
     
     with col_left:
         st.subheader("➕ 장소 추가")
         with st.form("add_place_form", clear_on_submit=False):
-            raw_input = st.text_input("네이버 플레이스 주소 또는 단축 링크", placeholder="예: 15333275 또는 https://naver.me/xktVvqyF")
-            submitted = st.form_submit_button("장소 분석 시작")
+            raw_input = st.text_input("네이버 플레이스 주소 또는 링크", placeholder="예: https://naver.me/xktVvqyF")
+            submitted = st.form_submit_button("장소 분석")
 
         if submitted and raw_input.strip():
             st.session_state.render_key = str(random.randint(1000, 9999))
             
-            with st.spinner("네이버 플레이스 연동 중..."):
+            with st.spinner("네이버 플레이스 확인 중..."):
                 try:
                     crawled = crawl_naver_place(raw_input)
                     st.session_state.pending_place = crawled
                     if crawled.get("success"):
-                        st.session_state.crawl_message = f"🎉 성공적으로 분석했습니다! 아래에서 '{crawled.get('name')}'의 데이터를 최종 확인해 주세요."
+                        st.session_state.crawl_message = f"🎉 성공적으로 분석했습니다! \n 아래에서 '{crawled.get('name')}'의 정보를 확인해 주세요."
                     else:
-                        st.session_state.crawl_message = "⚠️ 영업시간 구조를 자동으로 읽지 못했습니다. 아래에서 수동으로 채워주세요."
+                        st.session_state.crawl_message = f"⚠️ '{crawled.get('name')}'의 정보를 자동으로 읽지 못했습니다. \n 아래에서 수동으로 채워주세요."
                 except Exception as e:
                     st.session_state.pending_place = {
                         "place_id": normalize_input(raw_input)[0],
@@ -640,25 +647,21 @@ def main() -> None:
 
         pending = st.session_state.pending_place
         if pending:
-            if pending.get("success"):
-                edited = render_auto_form(pending)
-            else:
-                edited = render_manual_form(pending)
-
-            final = {
-                "place_id": pending.get("place_id", ""),
-                "source_url": pending.get("source_url", ""),
-                "name": edited.get("name", pending.get("name", "")),
-                "category": edited.get("category", "기타"),
-                "original_category": pending.get("original_category", ""),
-                "closed_days": edited.get("closed_days", []),
-                "weekly_hours": edited.get("weekly_hours", default_weekly_hours()),
-            }
-
-            if st.button("최종 확인 및 구글 시트 저장", type="primary"):
-                if not final["name"]:
+            if st.button("🚀 최종 확인 및 저장", type="primary", key="top_save_btn"):
+                name_to_save = st.session_state.get(f"edit_name_{pending.get('place_id')}", pending.get("name", ""))
+                cat_to_save = st.session_state.get(f"edit_cat_{pending.get('place_id')}", pending.get("category", "기타"))
+                if not name_to_save:
                     st.error("장소명을 입력하세요.")
                 else:
+                    final = {
+                        "place_id": pending.get("place_id", ""),
+                        "source_url": pending.get("source_url", ""),
+                        "name": edited.get("name", pending.get("name", "")),
+                        "category": edited.get("category", "기타"),
+                        "original_category": pending.get("original_category", ""),
+                        "closed_days": edited.get("closed_days", []),
+                        "weekly_hours": edited.get("weekly_hours", default_weekly_hours()),
+                    }
                     add_place_to_store(final)
                     st.success(f"'{final['name']}' 장소가 구글 시트에 저장되었습니다!")
                     st.session_state.pending_place = None
@@ -666,11 +669,19 @@ def main() -> None:
                     st.session_state.places = load_places() # 시트 저장 후 리로드
                     st.rerun()
 
+            st.markdown("---") # 버튼과 폼 사이 구분선
+            
+            # 버튼 아래에 실제 데이터 확인 및 수동 편집 폼이 나타납니다.
+            if pending.get("success"):
+                edited = render_auto_form(pending)
+            else:
+                edited = render_manual_form(pending)
+
     with col_right:
         st.subheader("🎲 랜덤 추천")
-        recommend_cat = st.selectbox("추천받을 카테고리 선택", CATEGORY_OPTIONS, index=0, key="recommend_cat_select")
+        recommend_cat = st.selectbox("카테고리 선택", CATEGORY_OPTIONS, index=0, key="recommend_cat_select")
         
-        if st.button("선택한 카테고리에서 랜덤 1곳 추천", type="primary", use_container_width=True):
+        if st.button("랜덤 추천", type="primary", use_container_width=True):
             rec = random_recommendation(st.session_state.places, recommend_cat)
             if rec:
                 orig_cat = rec.get('original_category', '')
@@ -678,7 +689,7 @@ def main() -> None:
                 st.success(f"🎯 오늘 추천 장소: **{rec.get('name', '')}** ({rec.get('category', '기타')}){cat_display}")
                 st.write(f"🔗 링크 바로가기: {rec.get('source_url', '')}")
             else:
-                st.warning(f"현재 영업 중인 '{recommend_cat}' 카테고리의 저장 장소가 없습니다.")
+                st.warning(f"현재 영업 중인 '{recommend_cat}' 장소가 없습니다.")
 
     st.divider()
     
@@ -795,25 +806,6 @@ def main() -> None:
                         st.rerun()
     else:
         st.info("조건에 맞는 장소가 없습니다.")
-
-    st.divider()
-    st.subheader("⚙️ 구글 시트 마이그레이션 도구 (선택사항)")
-    st.caption("기존에 다운로드받아 두었던 places_data.json 백업 파일이 있다면 아래에 업로드하여 한 번에 구글 시트로 밀어 넣을 수 있습니다.")
-    
-    uploaded_file = st.file_uploader("📥 기존 백업 파일(JSON)을 구글 시트로 업로드하기", type=["json"])
-    if uploaded_file is not None:
-        try:
-            uploaded_data = json.load(uploaded_file)
-            if isinstance(uploaded_data, list):
-                if st.button("🚀 위 데이터를 구글 시트에 덮어쓰기", type="secondary"):
-                    save_places(uploaded_data)
-                    st.success("🎉 기존 데이터를 구글 시트에 이관 완료했습니다! 페이지를 새로고침합니다.")
-                    st.rerun()
-            else:
-                st.error("올바른 JSON 배열 형식이 아닙니다.")
-        except Exception as e:
-            st.error(f"파일 파싱 오류: {e}")
-
 
 if __name__ == "__main__":
     main()
