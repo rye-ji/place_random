@@ -647,35 +647,31 @@ def main() -> None:
 
         pending = st.session_state.pending_place
         if pending:
-            if st.button("🚀 최종 확인 및 저장", type="primary", key="top_save_btn"):
-                name_to_save = st.session_state.get(f"edit_name_{pending.get('place_id')}", pending.get("name", ""))
-                cat_to_save = st.session_state.get(f"edit_cat_{pending.get('place_id')}", pending.get("category", "기타"))
-                if not name_to_save:
+            if pending.get("success"):
+                edited = render_auto_form(pending)
+            else:
+                edited = render_manual_form(pending)
+
+            final = {
+                "place_id": pending.get("place_id", ""),
+                "source_url": pending.get("source_url", ""),
+                "name": edited.get("name", pending.get("name", "")),
+                "category": edited.get("category", "기타"),
+                "original_category": pending.get("original_category", ""),
+                "closed_days": edited.get("closed_days", []),
+                "weekly_hours": edited.get("weekly_hours", default_weekly_hours()),
+            }
+
+            if st.button("최종 확인 및 구글 시트 저장", type="primary"):
+                if not final["name"]:
                     st.error("장소명을 입력하세요.")
                 else:
-                    final = {
-                        "place_id": pending.get("place_id", ""),
-                        "source_url": pending.get("source_url", ""),
-                        "name": edited.get("name", pending.get("name", "")),
-                        "category": edited.get("category", "기타"),
-                        "original_category": pending.get("original_category", ""),
-                        "closed_days": edited.get("closed_days", []),
-                        "weekly_hours": edited.get("weekly_hours", default_weekly_hours()),
-                    }
                     add_place_to_store(final)
                     st.success(f"'{final['name']}' 장소가 구글 시트에 저장되었습니다!")
                     st.session_state.pending_place = None
                     st.session_state.crawl_message = ""
                     st.session_state.places = load_places() # 시트 저장 후 리로드
                     st.rerun()
-
-            st.markdown("---") # 버튼과 폼 사이 구분선
-            
-            # 버튼 아래에 실제 데이터 확인 및 수동 편집 폼이 나타납니다.
-            if pending.get("success"):
-                edited = render_auto_form(pending)
-            else:
-                edited = render_manual_form(pending)
 
     with col_right:
         st.subheader("🎲 랜덤 추천")
