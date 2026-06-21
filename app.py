@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import requests
 import streamlit as st
 from bs4 import BeautifulSoup
+from streamlit_gsheets import GSheetsConnection
 
 
 APP_TITLE = "장소 추천기"
@@ -77,19 +78,56 @@ def ensure_state() -> None:
 
 
 def load_places() -> List[Dict[str, Any]]:
-    if not DATA_FILE.exists():
-        return []
     try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, list) else []
-    except Exception:
+        # ttl=0 으로 설정하여 캐싱을 막고 실시간으로 친구가 넣은 데이터도 가져옴
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        df = conn.read(worksheet="Sheet1", ttl=0)
+        
+        if df is None or df.empty:
+            return []
+            
+        # 구글 시트의 Unnamed나 결측치 행 방지
+        df = df.dropna(subset=["place_id"])
+        
+        records = df.to_dict(orient="records")
+        for r in records:
+            # 장소 ID가 숫자로 치환되어 저장되었을 경우를 대비해 문자열 변환
+            r["place_id"] = str(r["place_id"]).split(".")[0] if "." in str(r["place_id"]) else str(r["place_id"])
+            
+            # 텍스트로 저장된 리스트/딕셔너리를 파이썬 객체로 복원
+            if isinstance(r.get("closed_days"), str):
+                try:
+                    r["closed_days"] = json.loads(r["closed_days"])
+                except Exception:
+                    r["closed_days"] = []
+            if isinstance(r.get("weekly_hours"), str):
+                try:
+                    r["weekly_hours"] = json.loads(r["weekly_hours"])
+                except Exception:
+                    r["weekly_hours"] = default_weekly_hours()
+        return records
+    except Exception as e:
+        st.sidebar.error(f"구글 시트 로드 실패: {e}")
         return []
 
 
+# [수정] 구글 시트에 실시간 데이터 덮어쓰기
 def save_places(places: List[Dict[str, Any]]) -> None:
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(places, f, ensure_ascii=False, indent=2)
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        serialized_places = []
+        for p in places:
+            p_copy = p.copy()
+            # 구글 시트는 2차원 표이므로 내부 딕셔너리/리스트는 JSON 문자열로 직렬화하여 저장
+            p_copy["closed_days"] = json.dumps(p_copy.get("closed_days", []), ensure_ascii=False)
+            p_copy["weekly_hours"] = json.dumps(p_copy.get("weekly_hours", {}), ensure_ascii=False)
+            serialized_places.append(p_copy)
+            
+        df = pd.DataFrame(serialized_places)
+        conn.update(worksheet="Sheet1", data=df)
+        st.session_state.places = places # 로컬 상태 업데이트
+    except Exception as e:
+        st.error(f"구글 시트 저장 실패: {e}")
 
 
 def delete_place(place_id: str) -> None:
@@ -551,10 +589,15 @@ def main() -> None:
     st.set_page_config(page_title=APP_TITLE, page_icon="💘", layout="wide")
     ensure_state()
 
-    st.title("💘 데이트용 장소 추천기")
-    st.caption("네이버 플레이스 ID, 단축 URL(naver.me)을 지원하며, 실시간 영업시간 원격 업데이트가 가능합니다.")
+    # 앱 실행 시점 혹은 상단에서 언제든 최신 구글 시트 데이터를 한 번 동기화
+    if st.sidebar.button("🔄 구글 시트 데이터 즉시 동기화"):
+        st.session_state.places = load_places()
+        st.toast("구글 시트의 최신 데이터를 가져왔습니다!", icon="✅")
+        st.rerun()
 
-    # [수정] 장소 추가폼과 랜덤 추천을 상단 한 행에 2개의 열로 배치
+    st.title("💘 데이트용 장소 추천기 (Google Sheets Cloud)")
+    st.caption("구글 시트와 연동되어 데이터 유실 없이 실시간 공유가 가능합니다.")
+
     col_left, col_right = st.columns(2)
     
     with col_left:
@@ -611,14 +654,15 @@ def main() -> None:
                 "weekly_hours": edited.get("weekly_hours", default_weekly_hours()),
             }
 
-            if st.button("최종 확인 및 저장", type="primary"):
+            if st.button("최종 확인 및 구글 시트 저장", type="primary"):
                 if not final["name"]:
                     st.error("장소명을 입력하세요.")
                 else:
                     add_place_to_store(final)
-                    st.success(f"'{final['name']}' 장소가 저장되었습니다!")
+                    st.success(f"'{final['name']}' 장소가 구글 시트에 저장되었습니다!")
                     st.session_state.pending_place = None
                     st.session_state.crawl_message = ""
+                    st.session_state.places = load_places() # 시트 저장 후 리로드
                     st.rerun()
 
     with col_right:
@@ -637,12 +681,10 @@ def main() -> None:
 
     st.divider()
     
-    # [수정/신규] 저장된 장소 섹션 헤더 및 전체 일괄 업데이트 버튼 배치
     st.subheader("📋 저장된 장소 목록")
     
     col_sync, col_space = st.columns([1, 2])
     with col_sync:
-        # [신규 기능] 일률적으로 모든 장소 전체 업데이트 버튼
         if st.button("🔄 모든 장소 일괄 업데이트", use_container_width=True):
             if not st.session_state.places:
                 st.warning("업데이트할 저장된 장소가 없습니다.")
@@ -661,7 +703,7 @@ def main() -> None:
                         except Exception:
                             pass
                     save_places(st.session_state.places)
-                    st.success(f"🎉 총 {success_count}개 장소의 영업시간 정보가 최신화되었습니다!")
+                    st.success(f"🎉 총 {success_count}개 장소의 정보가 최신화되어 구글 시트에 반영되었습니다!")
                     st.rerun()
 
     left, right = st.columns([1, 1])
@@ -689,6 +731,7 @@ def main() -> None:
                     if ecol1.button("💾 변경 내용 저장", key=f"save_{place.get('place_id')}", type="primary"):
                         add_place_to_store(edited_place)
                         st.session_state.editing_place_id = None
+                        st.session_state.places = load_places()
                         st.rerun()
                     if ecol2.button("❌ 취소", key=f"cancel_{place.get('place_id')}"):
                         st.session_state.editing_place_id = None
@@ -753,38 +796,22 @@ def main() -> None:
         st.info("조건에 맞는 장소가 없습니다.")
 
     st.divider()
-    st.subheader("💾 데이터 백업 및 관리 (중요)")
+    st.subheader("⚙️ 구글 시트 마이그레이션 도구 (선택사항)")
+    st.caption("기존에 다운로드받아 두었던 places_data.json 백업 파일이 있다면 아래에 업로드하여 한 번에 구글 시트로 밀어 넣을 수 있습니다.")
     
-    # [신규 기능] 클라우드 배포 환경에서 데이터 유실 시 즉시 복구할 수 있는 업로더 추가
-    col_down, col_up = st.columns(2)
-    with col_down:
-        st.write("1. 장소를 추가하거나 수정한 뒤에는 아래 버튼으로 백업본을 저장해 두세요.")
-        export_json = json.dumps(st.session_state.places, ensure_ascii=False, indent=2)
-        st.download_button("📥 JSON 백업 다운로드", data=export_json, file_name="places_data.json", mime="application/json")
-        
-    with col_up:
-        st.write("2. 코드가 수정되어 데이터가 사라졌다면, 받아둔 백업 파일을 아래에 넣으세요.")
-        uploaded_file = st.file_uploader("📤places_data.json 백업 파일 올리기", type=["json"])
-        if uploaded_file is not None:
-            try:
-                uploaded_data = json.load(uploaded_file)
-                if isinstance(uploaded_data, list):
-                    st.session_state.places = uploaded_data
+    uploaded_file = st.file_uploader("📥 기존 백업 파일(JSON)을 구글 시트로 업로드하기", type=["json"])
+    if uploaded_file is not None:
+        try:
+            uploaded_data = json.load(uploaded_file)
+            if isinstance(uploaded_data, list):
+                if st.button("🚀 위 데이터를 구글 시트에 덮어쓰기", type="secondary"):
                     save_places(uploaded_data)
-                    st.success("🎉 데이터 복구 완료! 저장된 장소가 다시 나타납니다.")
+                    st.success("🎉 기존 데이터를 구글 시트에 이관 완료했습니다! 페이지를 새로고침합니다.")
                     st.rerun()
-                else:
-                    st.error("올바른 백업 파일 형식이 아닙니다.")
-            except Exception as e:
-                st.error(f"파일을 읽는 도중 오류가 발생했습니다: {e}")
-
-    with st.expander("저장 파일을 완전히 초기화하고 싶다면"):
-        st.write(f"저장 위치: `{DATA_FILE.resolve()}`")
-        if st.button("저장 데이터 전체 비우기", type="secondary"):
-            st.session_state.places = []
-            save_places([])
-            st.success("초기화되었습니다.")
-            st.rerun()
+            else:
+                st.error("올바른 JSON 배열 형식이 아닙니다.")
+        except Exception as e:
+            st.error(f"파일 파싱 오류: {e}")
 
 
 if __name__ == "__main__":
