@@ -125,7 +125,7 @@ def save_places(places: List[Dict[str, Any]]) -> None:
             serialized_places.append(p_copy)
             
         df = pd.DataFrame(serialized_places)
-        conn.update(worksheet="Sheet1", data=df)
+        conn.update(worksheet="시트1", data=df)
         st.session_state.places = places # 로컬 상태 업데이트
     except Exception as e:
         st.error(f"구글 시트 저장 실패: {e}")
