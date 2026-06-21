@@ -81,7 +81,7 @@ def load_places() -> List[Dict[str, Any]]:
     try:
         # ttl=0 으로 설정하여 캐싱을 막고 실시간으로 친구가 넣은 데이터도 가져옴
         conn = st.connection("gsheets", type=GSheetsConnection)
-        df = conn.read(worksheet="Sheet1", ttl=0)
+        df = conn.read(worksheet="시트1", ttl=0)
         
         if df is None or df.empty:
             return []

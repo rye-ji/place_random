@@ -1,4 +1,4 @@
-requests
-beautifulsoup4
 streamlit-gsheets
 pandas
+requests
+beautifulsoup4
